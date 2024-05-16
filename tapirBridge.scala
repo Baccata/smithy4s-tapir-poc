@@ -21,26 +21,30 @@ import sttp.tapir.server.model.ServerResponse
 import scala.util.control.NonFatal
 import sttp.model.Uri.QuerySegment
 
-// scalafmt: {maxColumn = 120}
-def tapirBridge[Alg[_[_, _, _, _, _]], F[_]](
-    service: Service[Alg],
-    makeServerCodecs: UnaryServerCodecs.Make[F, HttpRequest[Blob], HttpResponse[Blob]],
-    maxBytes: Option[Long] = None
-)(implicit impl: service.Impl[F], F: MonadError[F]): ThirdPartyInterpreter[F] =
-  new ThirdPartyInterpreter[F] {
-
-    implicit val monadErrorBridge: MonadThrowLike[F] = new MonadThrowLike[F] {
-      def flatMap[A, B](fa: F[A])(f: A => F[B]): F[B] = F.flatMap(fa)(f)
-      def handleErrorWith[A](fa: F[A])(f: Throwable => F[A]): F[A] = F.handleError(fa) { case NonFatal(t) =>
+implicit def monadErrorBridge[F[_]](implicit
+    F: MonadError[F]
+): MonadThrowLike[F] =
+  new MonadThrowLike[F] {
+    def flatMap[A, B](fa: F[A])(f: A => F[B]): F[B] = F.flatMap(fa)(f)
+    def handleErrorWith[A](fa: F[A])(f: Throwable => F[A]): F[A] =
+      F.handleError(fa) { case NonFatal(t) =>
         f(t)
       }
-      def pure[A](a: A): F[A] = F.unit(a)
-      def raiseError[A](e: Throwable): F[A] = F.error(e)
-      def zipMapAll[A](seq: IndexedSeq[F[Any]])(f: IndexedSeq[Any] => A): F[A] =
-        flatMap(seq.foldLeft(F.unit(Vector.empty[Any])) { case (acc, current) =>
-          flatMap(acc)(vec => flatMap(current)(any => pure(vec :+ any)))
-        })(vector => pure(f(vector)))
-    }
+    def pure[A](a: A): F[A] = F.unit(a)
+    def raiseError[A](e: Throwable): F[A] = F.error(e)
+    def zipMapAll[A](seq: IndexedSeq[F[Any]])(f: IndexedSeq[Any] => A): F[A] =
+      flatMap(seq.foldLeft(F.unit(Vector.empty[Any])) { case (acc, current) =>
+        flatMap(acc)(vec => flatMap(current)(any => pure(vec :+ any)))
+      })(vector => pure(f(vector)))
+  }
+
+// scalafmt: {maxColumn = 120}
+def tapirBridge[Alg[_[_, _, _, _, _]], F[_]](
+    impl: smithy4s.kinds.FunctorAlgebra[Alg, F],
+    makeServerCodecs: UnaryServerCodecs.Make[F, HttpRequest[Blob], HttpResponse[Blob]],
+    maxBytes: Option[Long] = None
+)(implicit service: Service[Alg], F: MonadError[F]): ThirdPartyInterpreter[F] =
+  new ThirdPartyInterpreter[F] {
 
     val smithy4sRouter = smithy4s.http
       .HttpUnaryServerRouter(service)(
